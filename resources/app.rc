@@ -8,8 +8,8 @@
 1 24 "resources/app.manifest"
 
 1 VERSIONINFO
-FILEVERSION 0,2,0,0
-PRODUCTVERSION 0,2,0,0
+FILEVERSION 1,0,0,0
+PRODUCTVERSION 1,0,0,0
 FILEOS 0x40004L
 FILETYPE 0x1L
 BEGIN
@@ -17,13 +17,15 @@ BEGIN
   BEGIN
     BLOCK "040904B0"
     BEGIN
-      VALUE "CompanyName", "LegionSwitch"
+      VALUE "Comments", "https://github.com/Marshall-Jimmy/LegionSwitch"
+      VALUE "CompanyName", "jimmma"
       VALUE "FileDescription", "LegionSwitch - lightweight Lenovo Legion performance mode switcher"
-      VALUE "FileVersion", "0.2.0"
+      VALUE "FileVersion", "1.0.0"
       VALUE "InternalName", "LegionSwitch"
+      VALUE "LegalCopyright", "Copyright (c) 2026 jimmma. MIT License."
       VALUE "OriginalFilename", "LegionSwitch.exe"
       VALUE "ProductName", "LegionSwitch"
-      VALUE "ProductVersion", "0.2.0"
+      VALUE "ProductVersion", "1.0.0"
     END
   END
   BLOCK "VarFileInfo"
@@ -31,3 +33,4 @@ BEGIN
     VALUE "Translation", 0x409, 1200
   END
 END
+

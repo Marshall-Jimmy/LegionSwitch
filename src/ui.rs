@@ -25,7 +25,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::Shell::{
     NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_ERROR, NIIF_INFO, NIM_ADD, NIM_DELETE,
-    NIM_MODIFY, NOTIFYICONDATAW, Shell_NotifyIconW,
+    NIM_MODIFY, NOTIFYICONDATAW, Shell_NotifyIconW, ShellExecuteW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CS_DROPSHADOW, CreatePopupMenu, CreateWindowExW, DI_NORMAL, DefWindowProcW,
@@ -35,8 +35,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     IMAGE_ICON, IsWindowVisible, KillTimer, LR_DEFAULTCOLOR, LoadCursorW, LoadIconW, LoadImageW,
     MB_ICONERROR, MB_OK, MENU_ITEM_FLAGS, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
     MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW,
-    SPI_GETWORKAREA, SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SetCursor,
-    SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    SPI_GETWORKAREA, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW,
+    SetCursor, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow,
     SystemParametersInfoW, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage,
     WA_INACTIVE, WM_ACTIVATE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU,
     WM_DESTROY, WM_DPICHANGED, WM_ENDSESSION, WM_ERASEBKGND, WM_HOTKEY, WM_KEYDOWN,
@@ -54,6 +54,7 @@ use crate::worker::{self, ApplyOutcome, Command, Event, WM_APP_EVENT};
 
 const WM_TRAYICON: u32 = WM_APP + 1;
 const WM_APP_SHOW: u32 = WM_APP + 2;
+const WM_APP_AUTOSTART: u32 = WM_APP + 3;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
 const TIMER_REFRESH: usize = 1;
@@ -67,13 +68,17 @@ const MENU_QUIET: usize = 1001;
 const MENU_BALANCED: usize = 1002;
 const MENU_BEAST: usize = 1003;
 const MENU_SHOW: usize = 1010;
+const MENU_SETTINGS: usize = 1011;
 const MENU_SYNC_OVERLAY: usize = 1020;
 const MENU_TELEMETRY: usize = 1021;
 const MENU_AUTOSTART: usize = 1030;
 const MENU_ABOUT: usize = 1040;
+const MENU_GITHUB: usize = 1041;
 const MENU_EXIT: usize = 1050;
 
 const PANEL_CLASS: &str = "LegionSwitch.Panel";
+const PROJECT_URL: &str = "https://github.com/Marshall-Jimmy/LegionSwitch";
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const BG: u32 = rgb(10, 14, 20);
 const BG_TOP: u32 = rgb(15, 24, 37);
@@ -108,6 +113,9 @@ enum Hit {
     None,
     Card(usize),
     Close,
+    Settings,
+    SettingsRow(usize),
+    Github,
 }
 
 #[derive(Clone, Copy)]
@@ -118,8 +126,12 @@ struct Layout {
     title: RECT,
     subtitle: RECT,
     divider_y: i32,
+    gear: RECT,
     close: RECT,
     cards: [RECT; 3],
+    settings_rows: [RECT; 3],
+    about: RECT,
+    github: RECT,
     status: RECT,
     hint: RECT,
 }
@@ -131,6 +143,12 @@ impl Layout {
         let width = s(440);
         let height = s(306);
 
+        let gear = RECT {
+            left: width - s(78),
+            top: s(12),
+            right: width - s(54),
+            bottom: s(36),
+        };
         let close = RECT {
             left: width - s(38),
             top: s(12),
@@ -176,18 +194,51 @@ impl Layout {
             title: RECT {
                 left: s(54),
                 top: s(9),
-                right: width - s(52),
+                right: width - s(96),
                 bottom: s(32),
             },
             subtitle: RECT {
                 left: s(54),
                 top: s(30),
-                right: width - s(52),
+                right: width - s(96),
                 bottom: s(45),
             },
             divider_y: s(50),
+            gear,
             close,
             cards,
+            settings_rows: [
+                RECT {
+                    left,
+                    top: s(64),
+                    right: width - s(24),
+                    bottom: s(108),
+                },
+                RECT {
+                    left,
+                    top: s(116),
+                    right: width - s(24),
+                    bottom: s(160),
+                },
+                RECT {
+                    left,
+                    top: s(168),
+                    right: width - s(24),
+                    bottom: s(212),
+                },
+            ],
+            about: RECT {
+                left,
+                top: s(222),
+                right: width - s(24),
+                bottom: s(280),
+            },
+            github: RECT {
+                left,
+                top: s(256),
+                right: width - s(24),
+                bottom: s(276),
+            },
             status: RECT {
                 left: s(24),
                 top: s(234),
@@ -343,10 +394,9 @@ struct App {
     busy: bool,
     pending_mode: Option<Mode>,
     pending_notify: bool,
-    hover_card: Option<usize>,
-    hover_close: bool,
-    pressed_card: Option<usize>,
-    pressed_close: bool,
+    hover: Hit,
+    pressed: Option<Hit>,
+    settings_open: bool,
     mouse_tracking: bool,
     last_shown: Instant,
     icons: Icons,
@@ -376,10 +426,9 @@ impl App {
             busy: false,
             pending_mode: None,
             pending_notify: false,
-            hover_card: None,
-            hover_close: false,
-            pressed_card: None,
-            pressed_close: false,
+            hover: Hit::None,
+            pressed: None,
+            settings_open: false,
             mouse_tracking: false,
             last_shown: Instant::now() - Duration::from_secs(10),
             icons,
@@ -401,6 +450,16 @@ impl App {
         }
         self.register_hotkeys();
         self.refresh();
+
+        let hwnd_bits = self.hwnd as usize;
+        let _ = std::thread::Builder::new()
+            .name("LegionSwitch-Autostart".to_string())
+            .spawn(move || {
+                let enabled = autostart::task_exists();
+                unsafe {
+                    PostMessageW(hwnd_bits as HWND, WM_APP_AUTOSTART, enabled as usize, 0);
+                }
+            });
     }
 
     unsafe fn current_dpi(&self) -> u32 {
@@ -486,10 +545,9 @@ impl App {
     unsafe fn hide_panel(&mut self) {
         KillTimer(self.hwnd, TIMER_REFRESH);
         ShowWindow(self.hwnd, SW_HIDE);
-        self.hover_card = None;
-        self.hover_close = false;
-        self.pressed_card = None;
-        self.pressed_close = false;
+        self.hover = Hit::None;
+        self.pressed = None;
+        self.settings_open = false;
         self.mouse_tracking = false;
         self.invalidate();
     }
@@ -738,9 +796,6 @@ impl App {
             return;
         }
 
-        if self.autostart_enabled.is_none() {
-            self.autostart_enabled = Some(autostart::task_exists());
-        }
         let autostart_on = self.autostart_enabled.unwrap_or(false);
         let current = self.current_mode();
         let enabled = !self.busy;
@@ -768,6 +823,7 @@ impl App {
         );
         append_menu(menu, 0, "", false, true);
         append_menu(menu, MENU_SHOW, "显示面板\tCtrl+Alt+L", false, true);
+        append_menu(menu, MENU_SETTINGS, "设置 / 关于", false, true);
         append_menu(
             menu,
             MENU_SYNC_OVERLAY,
@@ -795,6 +851,7 @@ impl App {
         );
         append_menu(menu, 0, "", false, true);
         append_menu(menu, MENU_ABOUT, "关于 LegionSwitch", false, true);
+        append_menu(menu, MENU_GITHUB, "GitHub 项目主页", false, true);
         append_menu(menu, MENU_EXIT, "退出", false, true);
 
         let mut point = POINT { x: 0, y: 0 };
@@ -823,14 +880,16 @@ impl App {
             MENU_BALANCED => self.apply_mode(Mode::Balanced, false),
             MENU_BEAST => self.apply_mode(Mode::Beast, false),
             MENU_SHOW => self.show_panel(),
+            MENU_SETTINGS => self.open_settings(),
             MENU_SYNC_OVERLAY => self.toggle_sync_overlay(),
             MENU_TELEMETRY => self.toggle_telemetry(),
             MENU_AUTOSTART => self.toggle_autostart(),
             MENU_ABOUT => self.show_balloon(
-                "LegionSwitch 0.2.0",
-                "Ctrl+Alt+1/2/3 切换模式，Ctrl+Alt+L 显示面板。",
+                &format!("LegionSwitch {APP_VERSION}  ·  by jimmma"),
+                PROJECT_URL,
                 false,
             ),
+            MENU_GITHUB => self.open_project_page(),
             MENU_EXIT => {
                 DestroyWindow(self.hwnd);
             }
@@ -896,6 +955,20 @@ impl App {
         let layout = self.layout();
         if contains(&layout.close, x, y) {
             return Hit::Close;
+        }
+        if contains(&layout.gear, x, y) {
+            return Hit::Settings;
+        }
+        if self.settings_open {
+            for (index, row) in layout.settings_rows.iter().enumerate() {
+                if contains(row, x, y) {
+                    return Hit::SettingsRow(index);
+                }
+            }
+            if contains(&layout.github, x, y) {
+                return Hit::Github;
+            }
+            return Hit::None;
         }
         for (index, card) in layout.cards.iter().enumerate() {
             if contains(card, x, y) {
@@ -996,6 +1069,13 @@ impl App {
                 self.show_panel();
                 0
             }
+            WM_APP_AUTOSTART => {
+                self.autostart_enabled = Some(wparam != 0);
+                if self.settings_open {
+                    self.invalidate();
+                }
+                0
+            }
             WM_APP_EVENT => {
                 if lparam != 0 {
                     let event = *Box::from_raw(lparam as *mut Event);
@@ -1009,9 +1089,8 @@ impl App {
             }
             WM_MOUSELEAVE => {
                 self.mouse_tracking = false;
-                if self.hover_card.is_some() || self.hover_close {
-                    self.hover_card = None;
-                    self.hover_close = false;
+                if self.hover != Hit::None {
+                    self.hover = Hit::None;
                     self.invalidate();
                 }
                 0
@@ -1025,13 +1104,17 @@ impl App {
                 0
             }
             WM_CAPTURECHANGED => {
-                self.pressed_card = None;
-                self.pressed_close = false;
+                self.pressed = None;
                 0
             }
             WM_KEYDOWN => {
                 if (wparam as u16) == VK_ESCAPE {
-                    self.hide_panel();
+                    if self.settings_open {
+                        self.settings_open = false;
+                        self.invalidate();
+                    } else {
+                        self.hide_panel();
+                    }
                 }
                 0
             }
@@ -1041,8 +1124,8 @@ impl App {
                     GetCursorPos(&mut point);
                     ScreenToClient(self.hwnd, &mut point);
                     let cursor = match self.hit_test(point.x, point.y) {
-                        Hit::Card(_) | Hit::Close => self.hand_cursor,
                         Hit::None => self.arrow_cursor,
+                        _ => self.hand_cursor,
                     };
                     if !cursor.is_null() {
                         SetCursor(cursor);
@@ -1057,7 +1140,9 @@ impl App {
                 GetCursorPos(&mut point);
                 ScreenToClient(self.hwnd, &mut point);
                 let layout = self.layout();
-                if contains(&layout.close, point.x, point.y) {
+                if contains(&layout.close, point.x, point.y)
+                    || contains(&layout.gear, point.x, point.y)
+                {
                     HTCLIENT as LRESULT
                 } else if contains(&layout.top_drag_area(), point.x, point.y) {
                     HTCAPTION as LRESULT
@@ -1087,63 +1172,77 @@ impl App {
 
         let (x, y) = mouse_position(lparam);
         let hit = self.hit_test(x, y);
-        let new_card = match hit {
-            Hit::Card(index) => Some(index),
-            _ => None,
-        };
-        let new_close = hit == Hit::Close;
-        if self.hover_card != new_card || self.hover_close != new_close {
-            self.hover_card = new_card;
-            self.hover_close = new_close;
+        if self.hover != hit {
+            self.hover = hit;
             self.invalidate();
         }
     }
 
     unsafe fn on_mouse_down(&mut self, lparam: LPARAM) {
         let (x, y) = mouse_position(lparam);
-        match self.hit_test(x, y) {
-            Hit::Card(index) => {
-                self.pressed_card = Some(index);
-                self.pressed_close = false;
-                SetCapture(self.hwnd);
-            }
-            Hit::Close => {
-                self.pressed_close = true;
-                self.pressed_card = None;
-                SetCapture(self.hwnd);
-            }
-            Hit::None => {
-                self.pressed_card = None;
-                self.pressed_close = false;
-            }
+        let hit = self.hit_test(x, y);
+        self.pressed = if hit == Hit::None { None } else { Some(hit) };
+        if self.pressed.is_some() {
+            SetCapture(self.hwnd);
         }
     }
 
     unsafe fn on_mouse_up(&mut self, lparam: LPARAM) {
         // `ReleaseCapture` synchronously sends WM_CAPTURECHANGED to this
-        // window, whose handler clears `pressed_card` / `pressed_close`.
-        // Snapshot the press state first, otherwise the click is lost before
-        // it can be matched to the card under the cursor.
-        let pressed_card = self.pressed_card;
-        let pressed_close = self.pressed_close;
-        self.pressed_card = None;
-        self.pressed_close = false;
+        // window, which clears the press state. Snapshot it first.
+        let pressed = self.pressed.take();
         ReleaseCapture();
 
         let (x, y) = mouse_position(lparam);
         let hit = self.hit_test(x, y);
-
-        if pressed_close && hit == Hit::Close {
-            self.hide_panel();
-            return;
+        if pressed.is_some() && pressed == Some(hit) {
+            self.activate_hit(hit);
         }
-        if let Some(index) = pressed_card {
-            if hit == Hit::Card(index) {
+    }
+
+    unsafe fn activate_hit(&mut self, hit: Hit) {
+        match hit {
+            Hit::Card(index) => {
                 if let Some(mode) = Mode::ALL.get(index).copied() {
                     self.apply_mode(mode, false);
                 }
             }
+            Hit::Close => self.hide_panel(),
+            Hit::Settings => self.toggle_settings(),
+            Hit::SettingsRow(0) => self.toggle_autostart(),
+            Hit::SettingsRow(1) => self.toggle_sync_overlay(),
+            Hit::SettingsRow(2) => self.toggle_telemetry(),
+            Hit::SettingsRow(_) => {}
+            Hit::Github => self.open_project_page(),
+            Hit::None => {}
         }
+    }
+
+    unsafe fn toggle_settings(&mut self) {
+        self.settings_open = !self.settings_open;
+        self.hover = Hit::None;
+        self.invalidate();
+    }
+
+    unsafe fn open_settings(&mut self) {
+        if IsWindowVisible(self.hwnd) == 0 {
+            self.show_panel();
+        }
+        self.settings_open = true;
+        self.hover = Hit::None;
+        self.invalidate();
+    }
+
+    unsafe fn open_project_page(&mut self) {
+        let url = wide(PROJECT_URL);
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            wide("open").as_ptr(),
+            url.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        );
     }
 
     unsafe fn paint(&mut self, hdc: HDC) {
@@ -1189,20 +1288,30 @@ impl App {
         self.paint_background(hdc, layout);
         self.paint_header(hdc, layout);
 
-        for (index, mode) in Mode::ALL.into_iter().enumerate() {
-            self.paint_mode_button(hdc, layout, index, mode);
+        if self.settings_open {
+            self.paint_settings(hdc, layout);
+            draw_text(
+                hdc,
+                "AUTO-SAVED   ·   ESC OR GEAR TO RETURN",
+                &layout.hint,
+                self.fonts.small,
+                FAINT,
+                DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
+            );
+        } else {
+            for (index, mode) in Mode::ALL.into_iter().enumerate() {
+                self.paint_mode_button(hdc, layout, index, mode);
+            }
+            self.paint_status(hdc, layout);
+            draw_text(
+                hdc,
+                "CTRL+ALT+1 / 2 / 3        L  PANEL",
+                &layout.hint,
+                self.fonts.small,
+                FAINT,
+                DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
+            );
         }
-
-        self.paint_status(hdc, layout);
-
-        draw_text(
-            hdc,
-            "CTRL+ALT+1 / 2 / 3        L  PANEL",
-            &layout.hint,
-            self.fonts.small,
-            FAINT,
-            DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
-        );
     }
 
     unsafe fn paint_background(&self, hdc: HDC, layout: &Layout) {
@@ -1319,9 +1428,14 @@ impl App {
             );
         }
 
+        let (title, subtitle) = if self.settings_open {
+            ("SETTINGS", "LEGIONSWITCH  ·  BY JIMMMA")
+        } else {
+            ("LEGIONSWITCH", "PERFORMANCE MODE  ·  V1.0.0")
+        };
         draw_text(
             hdc,
-            "LEGIONSWITCH",
+            title,
             &layout.title,
             self.fonts.title,
             TEXT,
@@ -1329,7 +1443,7 @@ impl App {
         );
         draw_text(
             hdc,
-            "PERFORMANCE MODE",
+            subtitle,
             &layout.subtitle,
             self.fonts.subtitle,
             MUTED,
@@ -1338,7 +1452,11 @@ impl App {
 
         // `01 / 02 / 03` mode numbering lives in the cards; the header line is
         // deliberately short and accent-colored so it reads as a power rail.
-        let accent = self.current_mode().map(mode_color).unwrap_or(CYAN);
+        let accent = if self.settings_open {
+            CYAN
+        } else {
+            self.current_mode().map(mode_color).unwrap_or(CYAN)
+        };
         draw_line(
             hdc,
             s(layout, 24),
@@ -1358,7 +1476,31 @@ impl App {
             s(layout, 2).max(1),
         );
 
-        if self.hover_close {
+        // Gear / settings toggle.
+        let gear_hover = self.hover == Hit::Settings;
+        if gear_hover || self.settings_open {
+            fill_round_rect(
+                hdc,
+                &layout.gear,
+                s(layout, 8),
+                rgb(30, 40, 53),
+                rgb(30, 40, 53),
+                1,
+            );
+        }
+        draw_gear(
+            hdc,
+            &layout.gear,
+            if self.settings_open || gear_hover {
+                accent
+            } else {
+                MUTED
+            },
+            s(layout, 1).max(1),
+        );
+
+        let close_hover = self.hover == Hit::Close;
+        if close_hover {
             fill_round_rect(
                 hdc,
                 &layout.close,
@@ -1377,7 +1519,7 @@ impl App {
             close_center_y - half,
             close_center_x + half,
             close_center_y + half,
-            if self.hover_close { TEXT } else { MUTED },
+            if close_hover { TEXT } else { MUTED },
             s(layout, 1).max(1),
         );
         draw_line(
@@ -1386,7 +1528,7 @@ impl App {
             close_center_y + half,
             close_center_x + half,
             close_center_y - half,
-            if self.hover_close { TEXT } else { MUTED },
+            if close_hover { TEXT } else { MUTED },
             s(layout, 1).max(1),
         );
     }
@@ -1395,7 +1537,7 @@ impl App {
         let card = &layout.cards[index];
         let selected = self.status.as_ref().and_then(|status| status.mode) == Some(mode);
         let pending = self.busy && self.pending_mode == Some(mode);
-        let hovered = self.hover_card == Some(index) && !self.busy;
+        let hovered = self.hover == Hit::Card(index) && !self.busy;
         let accent = mode_color(mode);
 
         if selected || pending || hovered {
@@ -1552,6 +1694,116 @@ impl App {
                 DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
             );
         }
+    }
+
+    unsafe fn paint_settings(&self, hdc: HDC, layout: &Layout) {
+        let accent = CYAN;
+        let rows = [
+            (
+                "开机自启动",
+                "START WITH WINDOWS",
+                self.autostart_enabled.unwrap_or(false),
+            ),
+            (
+                "同步 Windows 电源模式",
+                "POWER MODE SYNC",
+                self.config.sync_overlay,
+            ),
+            ("显示温度 / 风扇", "TELEMETRY", self.config.show_telemetry),
+        ];
+
+        for (index, (label, sub, enabled)) in rows.into_iter().enumerate() {
+            let row = &layout.settings_rows[index];
+            let hovered = self.hover == Hit::SettingsRow(index);
+            fill_round_rect(
+                hdc,
+                row,
+                s(layout, 12),
+                if hovered { CARD_HOVER } else { CARD },
+                if hovered { rgb(48, 61, 78) } else { LINE },
+                1,
+            );
+            let text_right = row.right - s(layout, 64);
+            draw_text(
+                hdc,
+                label,
+                &RECT {
+                    left: row.left + s(layout, 14),
+                    top: row.top + s(layout, 5),
+                    right: text_right,
+                    bottom: row.top + s(layout, 25),
+                },
+                self.fonts.status,
+                TEXT,
+                DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
+            );
+            draw_text(
+                hdc,
+                sub,
+                &RECT {
+                    left: row.left + s(layout, 14),
+                    top: row.top + s(layout, 24),
+                    right: text_right,
+                    bottom: row.top + s(layout, 38),
+                },
+                self.fonts.small,
+                FAINT,
+                DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
+            );
+
+            let toggle = RECT {
+                left: row.right - s(layout, 52),
+                top: (row.top + row.bottom) / 2 - s(layout, 9),
+                right: row.right - s(layout, 16),
+                bottom: (row.top + row.bottom) / 2 + s(layout, 9),
+            };
+            draw_toggle(hdc, &toggle, enabled, accent);
+        }
+
+        fill_round_rect(hdc, &layout.about, s(layout, 12), STATUS_BG, LINE, 1);
+        draw_text(
+            hdc,
+            &format!("LegionSwitch {APP_VERSION}"),
+            &RECT {
+                left: layout.about.left + s(layout, 14),
+                top: layout.about.top + s(layout, 5),
+                right: layout.about.right - s(layout, 14),
+                bottom: layout.about.top + s(layout, 23),
+            },
+            self.fonts.status,
+            TEXT,
+            DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
+        );
+        draw_text(
+            hdc,
+            "by jimmma  ·  MIT License",
+            &RECT {
+                left: layout.about.left + s(layout, 14),
+                top: layout.about.top + s(layout, 21),
+                right: layout.about.right - s(layout, 14),
+                bottom: layout.about.top + s(layout, 35),
+            },
+            self.fonts.small,
+            MUTED,
+            DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
+        );
+        draw_text(
+            hdc,
+            PROJECT_URL,
+            &RECT {
+                left: layout.about.left + s(layout, 14),
+                top: layout.github.top,
+                right: layout.github.right - s(layout, 14),
+                bottom: layout.github.bottom,
+            },
+            self.fonts.small,
+            if self.hover == Hit::Github {
+                accent
+            } else {
+                blend(MUTED, CYAN, 35)
+            },
+            DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
+        );
     }
 
     unsafe fn paint_status(&self, hdc: HDC, layout: &Layout) {
@@ -1817,6 +2069,11 @@ pub fn run(show: bool) -> Result<(), String> {
                 overlay: Some(Mode::Balanced),
             });
         }
+        #[cfg(debug_assertions)]
+        if std::env::var_os("LEGIONSWITCH_UI_SETTINGS").is_some() {
+            (*app_pointer).settings_open = true;
+            (*app_pointer).autostart_enabled = Some(false);
+        }
         (*app_pointer).init();
         if show {
             (*app_pointer).show_panel();
@@ -2065,6 +2322,56 @@ unsafe fn stroke_circle(hdc: HDC, cx: i32, cy: i32, radius: i32, color: u32, wid
     SelectObject(hdc, old_pen);
     SelectObject(hdc, old_brush);
     DeleteObject(pen as HGDIOBJ);
+}
+
+unsafe fn draw_gear(hdc: HDC, rect: &RECT, color: u32, width: i32) {
+    let cx = (rect.left + rect.right) / 2;
+    let cy = (rect.top + rect.bottom) / 2;
+    let outer = ((rect.right - rect.left).min(rect.bottom - rect.top) / 2 - 2).max(4);
+    let inner = (outer / 2).max(2);
+    stroke_circle(hdc, cx, cy, outer, color, width);
+    stroke_circle(hdc, cx, cy, inner, color, width);
+    for index in 0..8 {
+        let angle = index as f32 * std::f32::consts::TAU / 8.0;
+        let cos = angle.cos();
+        let sin = angle.sin();
+        draw_line(
+            hdc,
+            cx + (cos * inner as f32).round() as i32,
+            cy + (sin * inner as f32).round() as i32,
+            cx + (cos * (outer + 3) as f32).round() as i32,
+            cy + (sin * (outer + 3) as f32).round() as i32,
+            color,
+            width,
+        );
+    }
+}
+
+unsafe fn draw_toggle(hdc: HDC, rect: &RECT, on: bool, accent: u32) {
+    let height = rect.bottom - rect.top;
+    let radius = height / 2;
+    let track = if on { accent } else { rgb(40, 50, 64) };
+    fill_round_rect(hdc, rect, radius, track, track, 1);
+    let knob_radius = (height / 2 - 2).max(2);
+    let knob_cx = if on {
+        rect.right - radius
+    } else {
+        rect.left + radius
+    };
+    let knob_cy = (rect.top + rect.bottom) / 2;
+    fill_round_rect(
+        hdc,
+        &RECT {
+            left: knob_cx - knob_radius,
+            top: knob_cy - knob_radius,
+            right: knob_cx + knob_radius,
+            bottom: knob_cy + knob_radius,
+        },
+        knob_radius,
+        TEXT,
+        TEXT,
+        1,
+    );
 }
 
 unsafe fn draw_line(hdc: HDC, x1: i32, y1: i32, x2: i32, y2: i32, color: u32, width: i32) {

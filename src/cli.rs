@@ -7,6 +7,7 @@ pub enum Launch {
     Tray { show: bool },
     Apply(Mode),
     Status,
+    Diagnose,
     StartupInstall,
     StartupRemove,
     Help,
@@ -36,6 +37,7 @@ where
         "--tray" | "tray" | "--startup" => Launch::Tray { show: false },
         "--show" | "show" | "--ui" => Launch::Tray { show: true },
         "--status" | "status" => Launch::Status,
+        "--diagnose" | "diagnose" => Launch::Diagnose,
         "--quiet" | "quiet" => Launch::Apply(Mode::Quiet),
         "--balanced" | "balanced" | "--normal" | "normal" => Launch::Apply(Mode::Balanced),
         "--beast" | "beast" | "--performance" | "performance" => Launch::Apply(Mode::Beast),
@@ -66,6 +68,7 @@ pub fn run_cli(launch: Launch) -> i32 {
         }
         Launch::Tray { .. } => 0,
         Launch::Status => status(),
+        Launch::Diagnose => diagnose(),
         Launch::Apply(mode) => apply(mode),
         Launch::StartupInstall => startup_install(),
         Launch::StartupRemove => startup_remove(),
@@ -99,6 +102,87 @@ fn status() -> i32 {
         }
         Err(error) => {
             crate::console::err(&error);
+            1
+        }
+    }
+}
+
+fn diagnose() -> i32 {
+    let version = env!("CARGO_PKG_VERSION");
+    crate::console::out(&format!("LegionSwitch {version} diagnostic · by jimmma"));
+    crate::console::out(&format!(
+        "OS: windows/{} · exe: {}",
+        std::env::consts::ARCH,
+        std::env::current_exe()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|_| "unknown".to_string())
+    ));
+    crate::console::out(&format!("Config: {}", config::Config::path().display()));
+    let cfg = config::Config::load();
+    crate::console::out(&format!(
+        "Settings: sync_overlay={} show_telemetry={}",
+        cfg.sync_overlay, cfg.show_telemetry
+    ));
+    crate::console::out(&format!(
+        "Autostart task: {}",
+        if autostart::task_exists() {
+            "present"
+        } else {
+            "absent"
+        }
+    ));
+    crate::console::out("WMI: ROOT\\WMI · LENOVO_GAMEZONE_DATA");
+
+    match WmiSession::connect() {
+        Ok(session) => match session.status() {
+            Ok(status) => {
+                crate::console::out(&format!(
+                    "Mode: {} (raw={})",
+                    label_for_raw(status.raw_mode),
+                    status.raw_mode
+                ));
+                crate::console::out(&format!(
+                    "Windows power overlay: {}",
+                    status
+                        .overlay
+                        .map(|mode| mode.overlay_name_zh())
+                        .unwrap_or("unknown")
+                ));
+                crate::console::out(&format!(
+                    "CPU: {} · GPU: {} · FAN1: {} · FAN2: {}",
+                    status
+                        .telemetry
+                        .cpu_temp
+                        .map(|value| format!("{value} °C"))
+                        .unwrap_or_else(|| "n/a".to_string()),
+                    status
+                        .telemetry
+                        .gpu_temp
+                        .map(|value| format!("{value} °C"))
+                        .unwrap_or_else(|| "n/a".to_string()),
+                    status
+                        .telemetry
+                        .fan1
+                        .map(|value| format!("{value} RPM"))
+                        .unwrap_or_else(|| "n/a".to_string()),
+                    status
+                        .telemetry
+                        .fan2
+                        .map(|value| format!("{value} RPM"))
+                        .unwrap_or_else(|| "n/a".to_string()),
+                ));
+                crate::console::out("Result: OK");
+                0
+            }
+            Err(error) => {
+                crate::console::err(&format!("WMI status error: {error}"));
+                crate::console::out("Result: WMI_ERROR");
+                1
+            }
+        },
+        Err(error) => {
+            crate::console::err(&format!("WMI connect error: {error}"));
+            crate::console::out("Result: WMI_UNAVAILABLE");
             1
         }
     }
@@ -159,7 +243,7 @@ fn startup_remove() -> i32 {
 
 fn print_help() {
     crate::console::out(
-        "LegionSwitch - 轻量级联想 Legion 性能模式切换\n\
+        "LegionSwitch 1.0.0 - 轻量级联想 Legion 性能模式切换 · by jimmma\n\
          \n\
          用法:\n\
            LegionSwitch.exe                 打开面板\n\
@@ -168,6 +252,7 @@ fn print_help() {
            LegionSwitch.exe balanced        切换到普通模式\n\
            LegionSwitch.exe beast           切换到野兽模式\n\
            LegionSwitch.exe status          输出当前模式/温度/风扇\n\
+           LegionSwitch.exe diagnose        输出完整诊断报告\n\
            LegionSwitch.exe startup-install 安装开机自启动\n\
            LegionSwitch.exe startup-remove  移除开机自启动\n\
            LegionSwitch.exe --help          显示帮助\n\
@@ -196,6 +281,7 @@ mod tests {
         assert_eq!(parse_args(["beast"]), Launch::Apply(Mode::Beast));
         assert_eq!(parse_args(["normal"]), Launch::Apply(Mode::Balanced));
         assert_eq!(parse_args(["--status"]), Launch::Status);
+        assert_eq!(parse_args(["diagnose"]), Launch::Diagnose);
         assert!(matches!(parse_args(["nope"]), Launch::Invalid(_)));
     }
 }

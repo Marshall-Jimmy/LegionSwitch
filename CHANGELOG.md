@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0 — 2026-11-18
+
+首个产品化版本，作者 jimmma。
+
+- 面板内设置页：开机自启动、Windows 电源模式同步、遥测开关。
+- 设置页展示版本、作者 `jimmma`、MIT License 和 GitHub 项目入口。
+- 托盘菜单新增“设置 / 关于”和“GitHub 项目主页”。
+- 新增 `diagnose` CLI 诊断报告。
+- 开机自启动状态改为后台探测，打开设置页不再阻塞 UI。
+- 新增 `packaging/install.ps1` / `uninstall.ps1`：Program Files 安装、开始菜单、应用和功能卸载项。
+- 新增 `packaging/package.ps1`：生成便携 ZIP 和 SHA-256 校验文件。
+- 新增 GitHub Actions Windows 构建/测试工作流。
+- 版本资源、作者信息、版权和项目链接更新为 1.0.0 / jimmma。
+
 ## 0.2.0 — 2026-11-18
 
 LegionZone 风格 UI 与点击修复。
