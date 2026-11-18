@@ -1,0 +1,33 @@
+1 ICON "resources/legion-switch.ico"
+2 ICON "resources/quiet.ico"
+3 ICON "resources/balanced.ico"
+4 ICON "resources/beast.ico"
+5 ICON "resources/mode-quiet.ico"
+6 ICON "resources/mode-balanced.ico"
+7 ICON "resources/mode-beast.ico"
+1 24 "resources/app-preview.manifest"
+
+1 VERSIONINFO
+FILEVERSION 0,2,0,0
+PRODUCTVERSION 0,2,0,0
+FILEOS 0x40004L
+FILETYPE 0x1L
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "LegionSwitch"
+      VALUE "FileDescription", "LegionSwitch - lightweight Lenovo Legion performance mode switcher (UI preview)"
+      VALUE "FileVersion", "0.2.0"
+      VALUE "InternalName", "LegionSwitch"
+      VALUE "OriginalFilename", "LegionSwitch.exe"
+      VALUE "ProductName", "LegionSwitch"
+      VALUE "ProductVersion", "0.2.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

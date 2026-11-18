@@ -1,0 +1,6 @@
+/target
+/dist
+*.pdb
+*.lib
+*.exp
+_verify-*
